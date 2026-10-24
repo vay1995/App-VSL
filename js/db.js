@@ -255,7 +255,6 @@ class DatabaseService {
 
   // --- Internal Storage & Central Sync Helpers ---
   async syncFromCentralServer() {
-    if (this.isSupabaseConnected) return;
     try {
       if (typeof fetch === 'function') {
         const res = await fetch('/api/db/sync');
@@ -279,33 +278,79 @@ class DatabaseService {
     }
   }
 
+  async pushToCentralServerNow() {
+    try {
+      if (typeof fetch === 'function') {
+        const payload = {
+          users: this._get('USERS'),
+          classes: this._get('CLASSES'),
+          chapters: this._get('CHAPTERS'),
+          lessons: this._get('LESSONS'),
+          quizzes: this._get('QUIZZES'),
+          attempts: this._get('ATTEMPTS'),
+          auditLogs: this._get('AUDIT_LOGS'),
+          ownerEmail: this.getOwnerEmail()
+        };
+        const res = await fetch('/api/db/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          console.log('☁️ State immediately saved to Central Server Database (server_db.json)');
+          return true;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not push to central server:', e);
+    }
+    return false;
+  }
+
   pushToCentralServer() {
-    if (this.isSupabaseConnected) return;
     if (this._syncTimer) clearTimeout(this._syncTimer);
     this._syncTimer = setTimeout(async () => {
-      try {
-        if (typeof fetch === 'function') {
-          const payload = {
-            users: this._get('USERS'),
-            classes: this._get('CLASSES'),
-            chapters: this._get('CHAPTERS'),
-            lessons: this._get('LESSONS'),
-            quizzes: this._get('QUIZZES'),
-            attempts: this._get('ATTEMPTS'),
-            auditLogs: this._get('AUDIT_LOGS'),
-            ownerEmail: this.getOwnerEmail()
-          };
-          await fetch('/api/db/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-          console.log('☁️ State saved to Central Server Database');
-        }
-      } catch (e) {
-        console.warn('Could not push to central server:', e);
+      await this.pushToCentralServerNow();
+    }, 300);
+  }
+
+  async uploadFile(file) {
+    if (!file) throw new Error('គ្មានឯកសារដែលត្រូវអាប់ឡូតឡើយ');
+
+    const base64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+    try {
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: file.name,
+          fileData: base64,
+          mimeType: file.type || 'application/octet-stream'
+        })
+      });
+      if (res.ok) {
+        return await res.json();
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `Server error ${res.status}`);
       }
-    }, 500);
+    } catch (err) {
+      console.warn('Server upload note, using embedded storage:', err.message);
+      return {
+        success: true,
+        url: base64,
+        fileName: file.name,
+        storedName: file.name,
+        sizeBytes: file.size,
+        mimeType: file.type
+      };
+    }
   }
 
   _get(key) {
@@ -472,6 +517,10 @@ class DatabaseService {
     );
 
     return targetUser;
+  }
+
+  async updateUserStatus(userId, newStatus) {
+    return await this.toggleAccountStatus(userId, newStatus);
   }
 
   async toggleAccountStatus(userId, newStatus) {
@@ -726,12 +775,19 @@ class DatabaseService {
   // ==========================================
   async getQuizzes(classId = null, role = 'student') {
     let quizzes = this._get('QUIZZES');
-    if (classId) {
-      quizzes = quizzes.filter(q => q.classId === classId);
-    }
+
     // Students only see published quizzes
     if (role === 'student' || (window.auth && window.auth.isStudent())) {
       quizzes = quizzes.filter(q => q.isPublished === true);
+      if (classId && classId !== 'all') {
+        quizzes = quizzes.filter(q => q.classId === classId || q.classId === 'all' || !q.classId);
+      }
+    } else {
+      // Teachers and Owners:
+      // If a specific classId is provided (and not 'all'), filter by it
+      if (classId && classId !== 'all') {
+        quizzes = quizzes.filter(q => q.classId === classId || q.classId === 'all');
+      }
     }
     return quizzes;
   }
@@ -759,17 +815,74 @@ class DatabaseService {
 
   async createQuiz(quizData) {
     this._assertRole(['owner', 'teacher'], 'បង្កើតកម្រងតេស្ត (Create Quiz)');
+    const currentUser = window.auth ? window.auth.getCurrentUser() : null;
+
+    if (!quizData || !quizData.title || !quizData.title.trim()) {
+      throw new Error('ចំណងជើងតេស្តមិនអាចទទេបានទេ (Quiz title is required)');
+    }
+    if (!quizData.questions || !Array.isArray(quizData.questions) || quizData.questions.length === 0) {
+      throw new Error('តេស្តត្រូវតែមានសំណួរយ៉ាងតិច ១ (Quiz must have at least 1 question)');
+    }
 
     const quizzes = this._get('QUIZZES');
-    const newQuiz = {
-      id: 'quiz-' + Date.now(),
-      totalPoints: (quizData.questions || []).reduce((acc, q) => acc + (parseFloat(q.points) || 1), 0),
-      questionCount: (quizData.questions || []).length,
-      createdAt: new Date().toISOString(),
-      ...quizData
+
+    // Standardize & sanitize question models
+    const questions = (quizData.questions || []).map((q, idx) => ({
+      ...q,
+      id: q.id || ('q-' + Date.now() + '-' + (idx + 1)),
+      number: q.number || (idx + 1),
+      type: q.type || 'mcq',
+      difficulty: q.difficulty || 'medium',
+      points: parseFloat(q.points) || 5,
+      promptKm: q.promptKm || '',
+      mathFormula: q.mathFormula || '',
+      options: q.options || [],
+      correctOption: q.correctOption !== undefined ? q.correctOption : 'A',
+      explanationKm: q.explanationKm || '',
+      image: q.image || q.imageUrl || null
+    }));
+
+    const totalPoints = questions.reduce((acc, q) => acc + (parseFloat(q.points) || 1), 0);
+    const difficultyCounts = quizData.difficultyCounts || {
+      easy: questions.filter(q => q.difficulty === 'easy').length,
+      medium: questions.filter(q => q.difficulty === 'medium').length,
+      hard: questions.filter(q => q.difficulty === 'hard').length
     };
-    quizzes.push(newQuiz);
+
+    const newQuiz = {
+      id: quizData.id || ('quiz-' + Date.now()),
+      title: quizData.title,
+      description: quizData.description || '',
+      grade: parseInt(quizData.grade, 10) || 12,
+      classId: quizData.classId || 'class-12a',
+      chapterId: quizData.chapterId || null,
+      lessonId: quizData.lessonId || null,
+      subject: quizData.subject || 'គណិតវិទ្យា',
+      timeLimitMinutes: parseInt(quizData.timeLimitMinutes, 10) || 30,
+      maxAttempts: parseInt(quizData.maxAttempts, 10) || 1,
+      passPercentage: parseFloat(quizData.passPercentage) || 60,
+      shuffleQuestions: !!quizData.shuffleQuestions,
+      shuffleOptions: !!quizData.shuffleOptions,
+      showSolutionOnSubmit: quizData.showSolutionOnSubmit !== false,
+      isPublished: quizData.isPublished !== false,
+      createdBy: currentUser ? currentUser.id : 'user-teacher-1',
+      createdByName: currentUser ? (currentUser.fullNameKm || currentUser.fullNameEn) : 'លោកគ្រូ អ្នកគ្រូ',
+      createdByEmail: currentUser ? currentUser.email : '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      totalPoints,
+      questionCount: questions.length,
+      difficultyCounts,
+      questions,
+      uploadedFiles: quizData.uploadedFiles || []
+    };
+
+    // Prepend to array so newest shows first
+    quizzes.unshift(newQuiz);
     this._set('QUIZZES', quizzes);
+
+    // Save directly to central server database immediately
+    await this.pushToCentralServerNow();
 
     await this.logActivity('CREATE_QUIZ', 'quiz', newQuiz.id, `បានបង្កើតកម្រងតេស្ត៖ ${newQuiz.title}`);
     return newQuiz;
@@ -777,27 +890,109 @@ class DatabaseService {
 
   async updateQuiz(id, updates) {
     this._assertRole(['owner', 'teacher'], 'កែសម្រួលតេស្ត (Update Quiz)');
+    const currentUser = window.auth ? window.auth.getCurrentUser() : null;
 
     const quizzes = this._get('QUIZZES');
     const index = quizzes.findIndex(q => q.id === id);
     if (index === -1) throw new Error('រកមិនឃើញកម្រងតេស្តនេះទេ');
 
-    quizzes[index] = { ...quizzes[index], ...updates, updatedAt: new Date().toISOString() };
+    const existing = quizzes[index];
+
+    // RBAC Check: Non-owner teachers can only edit quizzes they created
+    if (currentUser && currentUser.role === 'teacher' && !currentUser.isOwner) {
+      if (existing.createdBy && existing.createdBy !== currentUser.id && existing.createdByEmail && existing.createdByEmail !== currentUser.email) {
+        throw new Error('សិទ្ធិត្រូវបានបដិសេធ (403 Forbidden): លោកអ្នកអាចកែសម្រួលតែតេស្តដែលលោកអ្នកបានបង្កើតប៉ុណ្ណោះ!');
+      }
+    }
+
+    let questions = updates.questions ? updates.questions.map((q, idx) => ({
+      ...q,
+      id: q.id || ('q-' + Date.now() + '-' + (idx + 1)),
+      number: q.number || (idx + 1),
+      type: q.type || 'mcq',
+      difficulty: q.difficulty || 'medium',
+      points: parseFloat(q.points) || 5,
+      promptKm: q.promptKm || '',
+      mathFormula: q.mathFormula || '',
+      options: q.options || [],
+      correctOption: q.correctOption !== undefined ? q.correctOption : 'A',
+      explanationKm: q.explanationKm || '',
+      image: q.image || q.imageUrl || null
+    })) : existing.questions;
+
+    const totalPoints = questions.reduce((acc, q) => acc + (parseFloat(q.points) || 1), 0);
+    const difficultyCounts = updates.difficultyCounts || {
+      easy: questions.filter(q => q.difficulty === 'easy').length,
+      medium: questions.filter(q => q.difficulty === 'medium').length,
+      hard: questions.filter(q => q.difficulty === 'hard').length
+    };
+
+    quizzes[index] = {
+      ...existing,
+      ...updates,
+      id: existing.id, // Strictly protect original ID to avoid duplicates!
+      questions,
+      totalPoints,
+      questionCount: questions.length,
+      difficultyCounts,
+      updatedAt: new Date().toISOString()
+    };
+
     this._set('QUIZZES', quizzes);
+    await this.pushToCentralServerNow();
 
     await this.logActivity('UPDATE_QUIZ', 'quiz', id, `បានកែសម្រួលកម្រងតេស្ត៖ ${quizzes[index].title}`);
     return quizzes[index];
   }
 
+  async duplicateQuiz(id) {
+    this._assertRole(['owner', 'teacher'], 'ចម្លងកម្រងតេស្ត (Duplicate Quiz)');
+    const target = await this.getQuizById(id, 'teacher');
+    if (!target) throw new Error('រកមិនឃើញកម្រងតេស្តដែលត្រូវចម្លងទេ');
+
+    const currentUser = window.auth ? window.auth.getCurrentUser() : null;
+
+    const duplicatedData = {
+      ...target,
+      id: 'quiz-' + Date.now(),
+      title: target.title + ' (ចម្លង)',
+      isPublished: false, // Default to draft
+      createdBy: currentUser ? currentUser.id : target.createdBy,
+      createdByName: currentUser ? (currentUser.fullNameKm || currentUser.fullNameEn) : target.createdByName,
+      createdByEmail: currentUser ? currentUser.email : target.createdByEmail,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    return await this.createQuiz(duplicatedData);
+  }
+
+  async togglePublishQuiz(id) {
+    this._assertRole(['owner', 'teacher'], 'ផ្លាស់ប្តូរការផ្សព្វផ្សាយតេស្ត');
+    const quiz = await this.getQuizById(id, 'teacher');
+    if (!quiz) throw new Error('រកមិនឃើញកម្រងតេស្តទេ');
+    return await this.updateQuiz(id, { isPublished: !quiz.isPublished });
+  }
+
   async deleteQuiz(id) {
     this._assertRole(['owner', 'teacher'], 'លុបកម្រងតេស្ត (Delete Quiz)');
+    const currentUser = window.auth ? window.auth.getCurrentUser() : null;
 
     let quizzes = this._get('QUIZZES');
     const target = quizzes.find(q => q.id === id);
+    if (!target) return true;
+
+    // RBAC: Non-owner teachers can only delete their own quizzes
+    if (currentUser && currentUser.role === 'teacher' && !currentUser.isOwner) {
+      if (target.createdBy && target.createdBy !== currentUser.id && target.createdByEmail && target.createdByEmail !== currentUser.email) {
+        throw new Error('សិទ្ធិត្រូវបានបដិសេធ (403 Forbidden): លោកអ្នកអាចលុបតែតេស្តដែលលោកអ្នកបានបង្កើតប៉ុណ្ណោះ!');
+      }
+    }
+
     quizzes = quizzes.filter(q => q.id !== id);
     this._set('QUIZZES', quizzes);
+    await this.pushToCentralServerNow();
 
-    await this.logActivity('DELETE_QUIZ', 'quiz', id, `បានលុបកម្រងតេស្ត៖ ${target ? target.title : id}`);
+    await this.logActivity('DELETE_QUIZ', 'quiz', id, `បានលុបកម្រងតេស្ត៖ ${target.title}`);
     return true;
   }
 

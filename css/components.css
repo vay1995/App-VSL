@@ -569,3 +569,193 @@
   width: 100%;
   height: 100%;
 }
+
+/* ==============================================================================
+   DIFFICULTY BADGES & QUIZ STATUSES
+   ============================================================================== */
+.badge-difficulty {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-full);
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.badge-easy {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+.badge-medium {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+.badge-hard {
+  background: rgba(244, 63, 94, 0.15);
+  color: #fb7185;
+  border: 1px solid rgba(244, 63, 94, 0.35);
+}
+.status-draft {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+/* ==============================================================================
+   FILE UPLOAD DROPZONE & ATTACHMENTS
+   ============================================================================== */
+.upload-dropzone {
+  border: 2px dashed rgba(99, 102, 241, 0.4);
+  background: rgba(99, 102, 241, 0.04);
+  border-radius: var(--radius-lg);
+  padding: 2rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  transition: var(--transition-normal);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}
+.upload-dropzone:hover, .upload-dropzone.dragover {
+  border-color: var(--primary-light);
+  background: rgba(99, 102, 241, 0.12);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.2);
+}
+.upload-dropzone-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--primary-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.uploaded-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+.upload-file-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  gap: 0.75rem;
+}
+.upload-file-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  overflow: hidden;
+}
+.upload-file-name {
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+.upload-file-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* ==============================================================================
+   PRINTABLE WORKSHEET & EXAM PAPER STYLES
+   ============================================================================== */
+.printable-exam-paper {
+  background: #ffffff;
+  color: #0f172a;
+  padding: 2.5rem;
+  border-radius: var(--radius-md);
+  font-family: var(--font-khmer);
+  line-height: 1.6;
+  max-width: 850px;
+  margin: 0 auto;
+  box-shadow: var(--shadow-lg);
+}
+.printable-exam-header {
+  text-align: center;
+  border-bottom: 2px solid #0f172a;
+  padding-bottom: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.printable-exam-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.printable-exam-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  color: #334155;
+  margin-top: 0.75rem;
+}
+.printable-student-box {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+  background: #f8fafc;
+}
+.printable-question-item {
+  margin-bottom: 1.75rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px dashed #e2e8f0;
+  page-break-inside: avoid;
+}
+.printable-question-num {
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 0.4rem;
+}
+.printable-options-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 0.6rem;
+  padding-left: 1rem;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .printable-exam-paper, .printable-exam-paper * {
+    visibility: visible;
+  }
+  .printable-exam-paper {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 1.5cm;
+    box-shadow: none;
+    border: none;
+  }
+  .no-print, .modal-footer, .app-header, .app-bottom-nav, .toast-container {
+    display: none !important;
+  }
+}
+

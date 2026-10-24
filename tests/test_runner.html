@@ -252,6 +252,203 @@
         assert(genQuestions[0].mathFormula && genQuestions[0].mathFormula.length > 0, 'Generated question contains valid mathFormula');
         assert(genQuestions[0].explanationKm && genQuestions[0].explanationKm.length > 0, 'Generated question contains step-by-step Khmer explanation');
 
+        // ==========================================
+        // 8. QUIZ CREATION, MIXED DIFFICULTY, FILE UPLOAD & PERSISTENCE VERIFICATION
+        // ==========================================
+        log('--- 8. Testing Quiz Creation, Mixed Difficulty Matrix & File Upload ---', 'header');
+
+        // Case 1: Create 20-question quiz with 5 easy, 10 medium, 5 hard and verify immediate return
+        await window.auth.login('teacher@khmermath.edu.kh', 'Password123!');
+        assert(window.auth.isTeacher() === true, 'Teacher logged in to create and manage quizzes');
+
+        const mixedQuestions = window.aiStudio.generateFromCurriculumEngine('ចំនួនកុំផ្លិច', '12', 'mcq', 'mixed', { easy: 5, medium: 10, hard: 5 });
+        assert(mixedQuestions.length === 20, `Generated exactly 20 questions (found: ${mixedQuestions.length})`);
+        
+        const countEasy = mixedQuestions.filter(q => q.difficulty === 'easy').length;
+        const countMed = mixedQuestions.filter(q => q.difficulty === 'medium').length;
+        const countHard = mixedQuestions.filter(q => q.difficulty === 'hard').length;
+        assert(countEasy === 5 && countMed === 10 && countHard === 5, `Mixed difficulty matched request: ងាយ=${countEasy}, មធ្យម=${countMed}, ពិបាក=${countHard}`);
+
+        const testQuizPayload = {
+          title: 'តេស្តគណិតវិទ្យាថ្នាក់ទី១២ - ចំនួនកុំផ្លិច (សាកល្បង)',
+          description: 'តេស្តបង្កើតដោយស្វ័យប្រវត្តិកម្រិតចម្រុះ ងាយ ៥ មធ្យម ១០ ពិបាក ៥',
+          grade: 12,
+          classId: 'class-12a',
+          timeLimitMinutes: 45,
+          difficultyCounts: { easy: 5, medium: 10, hard: 5 },
+          questions: mixedQuestions
+        };
+
+        const savedQuiz = await window.db.createQuiz(testQuizPayload);
+        assert(savedQuiz && savedQuiz.id, `Quiz successfully saved with permanent ID: ${savedQuiz.id}`);
+        assert(savedQuiz.questionCount === 20, 'Quiz questionCount recorded as 20');
+        assert(savedQuiz.createdBy === window.auth.currentUser.id, 'Quiz correctly associated with creating teacher ID');
+
+        // Case 1 verification: Immediately appears in getQuizzes()
+        const teacherQuizzes = await window.db.getQuizzes(null, 'teacher');
+        const foundImmediate = teacherQuizzes.find(q => q.id === savedQuiz.id);
+        assert(foundImmediate !== undefined, 'Case 1: Newly saved quiz immediately appears in teacher quiz room list');
+        assert(foundImmediate.difficultyCounts.easy === 5 && foundImmediate.difficultyCounts.medium === 10 && foundImmediate.difficultyCounts.hard === 5, 'Case 1: Quiz retains exact difficulty counts in database');
+
+        // Case 2: Persistence across page refresh and re-login
+        await window.auth.logout();
+        await window.db.syncFromCentralServer(); // Simulates fresh app startup & central DB sync
+        await window.auth.login('teacher@khmermath.edu.kh', 'Password123!');
+        const reloadedQuizzes = await window.db.getQuizzes(null, 'teacher');
+        const foundReloaded = reloadedQuizzes.find(q => q.id === savedQuiz.id);
+        assert(foundReloaded !== undefined, 'Case 2: Quiz persists across logout, central DB sync, and re-login');
+        assert(foundReloaded.questions && foundReloaded.questions.length === 20, 'Case 2: All 20 questions persisted with complete formulas and options');
+
+        // Case 3: Edit existing quiz updates in-place without duplicating
+        const quizCountBeforeEdit = reloadedQuizzes.length;
+        const updatedQuiz = await window.db.updateQuiz(savedQuiz.id, {
+          title: 'តេស្តគណិតវិទ្យាថ្នាក់ទី១២ - ចំនួនកុំផ្លិច (កែសម្រួលរួច)',
+          timeLimitMinutes: 60
+        });
+        const quizzesAfterEdit = await window.db.getQuizzes(null, 'teacher');
+        assert(quizzesAfterEdit.length === quizCountBeforeEdit, 'Case 3: Editing existing quiz does NOT create duplicate records');
+        const refreshedQuiz = await window.db.getQuizById(savedQuiz.id, 'teacher');
+        assert(refreshedQuiz.title === 'តេស្តគណិតវិទ្យាថ្នាក់ទី១២ - ចំនួនកុំផ្លិច (កែសម្រួលរួច)', 'Case 3: Quiz title updated successfully in database');
+        assert(refreshedQuiz.timeLimitMinutes === 60, 'Case 3: Quiz timeLimitMinutes updated successfully to 60');
+
+        // Duplicate feature
+        const duplicatedQuiz = await window.db.duplicateQuiz(savedQuiz.id);
+        assert(duplicatedQuiz.title.includes('(ចម្លង)'), 'Case 3b: duplicateQuiz creates copy with (ចម្លង) suffix');
+        assert(duplicatedQuiz.isPublished === false, 'Case 3b: Duplicated quiz defaults to Draft (isPublished: false)');
+
+        // Case 4: Upload endpoint and image question preservation
+        let uploadSuccess = false;
+        let uploadedUrl = null;
+        try {
+          // Send 1x1 transparent PNG base64 to /api/upload
+          const sampleBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+          const uploadRes = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName: 'test_diagram_math.png',
+              fileData: sampleBase64
+            })
+          });
+          if (uploadRes.ok) {
+            const uploadJson = await uploadRes.json();
+            if (uploadJson.success && uploadJson.url.startsWith('/uploads/')) {
+              uploadSuccess = true;
+              uploadedUrl = uploadJson.url;
+            }
+          }
+        } catch (e) {
+          console.warn('Upload test error:', e);
+        }
+        assert(uploadSuccess, `Case 4: Upload endpoint successfully stores image and returns permanent URL (${uploadedUrl})`);
+
+        // Create a question with the uploaded image URL
+        const quizWithImage = await window.db.createQuiz({
+          title: 'តេស្តគណិតវិទ្យាមានរូបភាពក្រាប និងធរណីមាត្រ',
+          grade: 12,
+          questions: [
+            {
+              number: 1,
+              type: 'mcq',
+              difficulty: 'hard',
+              promptKm: 'សង្កេតរូបភាពក្រាបខាងក្រោម រួចកំណត់តម្លៃសមីការបន្ទាត់ប៉ះ',
+              mathFormula: 'f(x) = x^3 - 3x + 2',
+              imageUrl: uploadedUrl,
+              options: [
+                { label: 'A', textKm: 'y = 3x - 1' },
+                { label: 'B', textKm: 'y = 2x + 1' },
+                { label: 'C', textKm: 'y = -x + 4' },
+                { label: 'D', textKm: 'y = 0' }
+              ],
+              correctOption: 'A',
+              explanationKm: 'ដោយរកដេរីវេ f\'(x) = 3x^2 - 3...'
+            }
+          ]
+        });
+        const retrievedImgQuiz = await window.db.getQuizById(quizWithImage.id, 'teacher');
+        assert(retrievedImgQuiz.questions[0].image === uploadedUrl, 'Case 4: Question retains permanent image URL in database');
+
+        // Case 5: Validation errors on invalid file and empty quiz
+        let emptyQuizRejected = false;
+        try {
+          await window.db.createQuiz({ title: '', questions: [] });
+        } catch (err) {
+          emptyQuizRejected = true;
+        }
+        assert(emptyQuizRejected, 'Case 5: Validation rejects empty quiz title and empty question array');
+
+        let invalidUploadRejected = false;
+        try {
+          const badUploadRes = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName: 'malicious_script.exe',
+              fileData: 'TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAA'
+            })
+          });
+          if (!badUploadRes.ok) {
+            invalidUploadRejected = true;
+          }
+        } catch (e) {
+          invalidUploadRejected = true;
+        }
+        assert(invalidUploadRejected, 'Case 5: Upload endpoint blocks dangerous file extensions (.exe)');
+
+        // Case 6: RBAC & Answer Protection
+        // 6a: Register a 2nd teacher
+        const teacher2Email = 'teacher2_test_' + Date.now() + '@khmermath.edu.kh';
+        const teacher2 = await window.auth.register({
+          fullNameKm: 'អ្នកគ្រូ តេស្តទី២',
+          email: teacher2Email,
+          password: 'Password123!',
+          requestedRole: 'teacher'
+        });
+
+        // Owner approves Teacher 2's registration
+        await window.auth.login('vayseangleng@gmail.com', 'Password123!');
+        await window.db.updateUserStatus(teacher2.id, 'active');
+
+        // Now Teacher 2 logs in successfully
+        await window.auth.login(teacher2Email, 'Password123!');
+        assert(window.auth.isTeacher() === true, 'Teacher 2 logged in as approved non-owner teacher');
+
+        // Teacher 2 tries to delete Teacher 1's quiz
+        let deleteUnauthorizedBlocked = false;
+        try {
+          await window.db.deleteQuiz(savedQuiz.id);
+        } catch (err) {
+          deleteUnauthorizedBlocked = true;
+        }
+        assert(deleteUnauthorizedBlocked, 'Case 6a: Non-owner Teacher 2 is blocked from deleting Teacher 1\'s quiz (403)');
+
+        // Teacher 2 tries to edit Teacher 1's quiz
+        let editUnauthorizedBlocked = false;
+        try {
+          await window.db.updateQuiz(savedQuiz.id, { title: 'Hacked Title' });
+        } catch (err) {
+          editUnauthorizedBlocked = true;
+        }
+        assert(editUnauthorizedBlocked, 'Case 6b: Non-owner Teacher 2 is blocked from editing Teacher 1\'s quiz (403)');
+
+        // 6c: Owner can edit or delete any quiz
+        await window.auth.login('vayseangleng@gmail.com', 'Password123!');
+        assert(window.auth.isOwner() === true, 'Super Admin / Owner logged in');
+        const ownerUpdate = await window.db.updateQuiz(savedQuiz.id, { description: 'Verified by Super Admin' });
+        assert(ownerUpdate.description === 'Verified by Super Admin', 'Case 6c: Super Admin has global override permission to manage all quizzes');
+
+        // 6d: Student privacy
+        await window.auth.login('student@khmermath.edu.kh', 'Password123!');
+        const studentQuizView = await window.db.getQuizById(savedQuiz.id, 'student');
+        let answersLeaked = false;
+        for (const q of studentQuizView.questions) {
+          if (q.correctOption !== undefined || q.explanationKm !== undefined) {
+            answersLeaked = true;
+            break;
+          }
+        }
+        assert(!answersLeaked, 'Case 6d: Student cannot access master correctOption or explanationKm prior to submission');
+
         sum.innerHTML = `<span style="color:#10b981;">🎉 ALL TESTS PASSED (${passed}/${passed + failed})! Cross-Platform PWA, Security & Gemini AI verified.</span>`;
         window.__TEST_RESULTS = { passed, failed, success: failed === 0 };
       } catch (err) {

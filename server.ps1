@@ -210,6 +210,97 @@ try {
         }
 
         # -------------------------------------------------------------
+        # API ROUTE: /api/upload (Secure File & Image Storage)
+        # -------------------------------------------------------------
+        if ($urlPath -eq "api/upload") {
+            $response.ContentType = "application/json; charset=utf-8"
+
+            if ($request.HttpMethod -eq "POST") {
+                try {
+                    $reader = New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)
+                    $body = $reader.ReadToEnd()
+                    $payload = $body | ConvertFrom-Json
+
+                    if (-not $payload.fileName -or -not $payload.fileData) {
+                        $errData = @{ "error" = "Missing fileName or fileData payload" }
+                        $buffer = [System.Text.Encoding]::UTF8.GetBytes(($errData | ConvertTo-Json))
+                        $response.StatusCode = 400
+                        $response.ContentLength64 = $buffer.Length
+                        $response.OutputStream.Write($buffer, 0, $buffer.Length)
+                        $response.Close()
+                        continue
+                    }
+
+                    # Validate extension
+                    $rawExt = [System.IO.Path]::GetExtension($payload.fileName).ToLower()
+                    $allowedExts = @(".pdf", ".docx", ".jpg", ".jpeg", ".png", ".webp")
+                    if (-not ($allowedExts -contains $rawExt)) {
+                        $errData = @{ "error" = "File extension $rawExt is not allowed. Allowed extensions: " + ($allowedExts -join ', ') }
+                        $buffer = [System.Text.Encoding]::UTF8.GetBytes(($errData | ConvertTo-Json))
+                        $response.StatusCode = 400
+                        $response.ContentLength64 = $buffer.Length
+                        $response.OutputStream.Write($buffer, 0, $buffer.Length)
+                        $response.Close()
+                        continue
+                    }
+
+                    # Sanitize base64 (strip data url header if present)
+                    $base64 = $payload.fileData
+                    if ($base64 -match '^data:[^;]+;base64,(.+)$') {
+                        $base64 = $matches[1]
+                    }
+
+                    $fileBytes = [System.Convert]::FromBase64String($base64)
+                    # Limit size to 15MB
+                    if ($fileBytes.Length -gt (15 * 1024 * 1024)) {
+                        $errData = @{ "error" = "File size exceeds 15MB limit" }
+                        $buffer = [System.Text.Encoding]::UTF8.GetBytes(($errData | ConvertTo-Json))
+                        $response.StatusCode = 400
+                        $response.ContentLength64 = $buffer.Length
+                        $response.OutputStream.Write($buffer, 0, $buffer.Length)
+                        $response.Close()
+                        continue
+                    }
+
+                    $uploadsDir = Join-Path $workspacePath "uploads"
+                    if (-not (Test-Path $uploadsDir)) {
+                        New-Item -ItemType Directory -Path $uploadsDir -Force | Out-Null
+                    }
+
+                    $cleanBase = [System.IO.Path]::GetFileNameWithoutExtension($payload.fileName) -replace '[^a-zA-Z0-9_-]', '_'
+                    $timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                    $storedFileName = "${timestamp}_${cleanBase}${rawExt}"
+                    $savedPath = Join-Path $uploadsDir $storedFileName
+
+                    [System.IO.File]::WriteAllBytes($savedPath, $fileBytes)
+                    Write-Host " [Upload] Successfully saved: $storedFileName ($($fileBytes.Length) bytes)" -ForegroundColor Cyan
+
+                    $resData = @{
+                        "success"     = $true;
+                        "url"         = "/uploads/$storedFileName";
+                        "fileName"    = $payload.fileName;
+                        "storedName"  = $storedFileName;
+                        "sizeBytes"   = $fileBytes.Length;
+                        "mimeType"    = $payload.mimeType;
+                        "timestamp"   = (Get-Date).ToString("o")
+                    }
+                    $buffer = [System.Text.Encoding]::UTF8.GetBytes(($resData | ConvertTo-Json))
+                    $response.StatusCode = 200
+                    $response.ContentLength64 = $buffer.Length
+                    $response.OutputStream.Write($buffer, 0, $buffer.Length)
+                } catch {
+                    $errData = @{ "error" = "Upload failed: " + $_.Exception.Message }
+                    $buffer = [System.Text.Encoding]::UTF8.GetBytes(($errData | ConvertTo-Json))
+                    $response.StatusCode = 500
+                    $response.ContentLength64 = $buffer.Length
+                    $response.OutputStream.Write($buffer, 0, $buffer.Length)
+                }
+                $response.Close()
+                continue
+            }
+        }
+
+        # -------------------------------------------------------------
         # STATIC FILES
         # -------------------------------------------------------------
         if ([string]::IsNullOrEmpty($urlPath) -or $urlPath -eq "/") {
@@ -258,8 +349,10 @@ try {
                 ".png"         { "image/png" }
                 ".jpg"         { "image/jpeg" }
                 ".jpeg"        { "image/jpeg" }
+                ".webp"        { "image/webp" }
                 ".svg"         { "image/svg+xml" }
                 ".pdf"         { "application/pdf" }
+                ".docx"        { "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }
                 ".mp4"         { "video/mp4" }
                 default        { "application/octet-stream" }
             }

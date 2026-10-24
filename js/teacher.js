@@ -648,7 +648,7 @@ class TeacherController {
   }
 
   // ==========================================
-  // QUIZ AUTHORING INTERFACE
+  // QUIZ AUTHORING INTERFACE («តេស្តរបស់ខ្ញុំ» & QUIZ MANAGEMENT)
   // ==========================================
   async renderQuizManager(container) {
     if (!window.auth.canEditLesson()) {
@@ -665,78 +665,355 @@ class TeacherController {
       return;
     }
 
-    const quizzes = await window.db.getQuizzes(this.selectedClassId, 'teacher');
+    // Default filters if not set
+    if (this.quizSearchQuery === undefined) this.quizSearchQuery = '';
+    if (this.quizFilterGrade === undefined) this.quizFilterGrade = 'all';
+    if (this.quizFilterClass === undefined) this.quizFilterClass = 'all';
+    if (this.quizFilterStatus === undefined) this.quizFilterStatus = 'all';
+    if (this.quizSortBy === undefined) this.quizSortBy = 'newest';
+
+    // Fetch all quizzes for teachers
+    const allQuizzes = await window.db.getQuizzes(null, 'teacher');
+
+    // Apply filtering
+    let filteredQuizzes = allQuizzes.filter(q => {
+      // 1. Search Query
+      if (this.quizSearchQuery) {
+        const query = this.quizSearchQuery.toLowerCase();
+        const matchTitle = (q.title || '').toLowerCase().includes(query);
+        const matchDesc = (q.description || '').toLowerCase().includes(query);
+        const matchTopic = (q.subject || '').toLowerCase().includes(query);
+        if (!matchTitle && !matchDesc && !matchTopic) return false;
+      }
+
+      // 2. Grade Filter
+      if (this.quizFilterGrade !== 'all') {
+        const g = parseInt(this.quizFilterGrade, 10);
+        if (q.grade && q.grade !== g) return false;
+      }
+
+      // 3. Class Filter
+      if (this.quizFilterClass !== 'all') {
+        if (q.classId && q.classId !== this.quizFilterClass && q.classId !== 'all') return false;
+      }
+
+      // 4. Status Filter
+      if (this.quizFilterStatus === 'published' && !q.isPublished) return false;
+      if (this.quizFilterStatus === 'draft' && q.isPublished) return false;
+
+      return true;
+    });
+
+    // Apply sorting
+    filteredQuizzes.sort((a, b) => {
+      if (this.quizSortBy === 'newest') return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+      if (this.quizSortBy === 'oldest') return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
+      if (this.quizSortBy === 'title') return (a.title || '').localeCompare(b.title || '');
+      if (this.quizSortBy === 'points') return (b.totalPoints || 0) - (a.totalPoints || 0);
+      return 0;
+    });
+
+    // Counts
+    const totalCount = allQuizzes.length;
+    const publishedCount = allQuizzes.filter(q => q.isPublished).length;
+    const draftCount = totalCount - publishedCount;
+    const totalQuestionsAll = allQuizzes.reduce((sum, q) => sum + ((q.questions || []).length), 0);
 
     container.innerHTML = `
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
-        <div>
-          <h2 style="font-size: 1.35rem; font-weight: 700;">ប្រព័ន្ធបង្កើត និងគ្រប់គ្រងតេស្ត</h2>
-          <p style="color: var(--text-secondary); font-size: 0.9rem;">បង្កើតសំណួរគណិតវិទ្យា ជ្រើសរើសចម្លើយ ពិត/មិនពិត និងសំណួរឆ្លើយខ្លី</p>
+      <div style="margin-bottom: 2rem;">
+        <!-- Header & Action Buttons -->
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+          <div>
+            <h2 style="font-size: 1.35rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem;">
+              <i data-lucide="file-text" style="color: var(--primary-light);"></i> តេស្តរបស់ខ្ញុំ & បន្ទប់តេស្តគណិតវិទ្យា
+            </h2>
+            <p style="color: var(--text-secondary); font-size: 0.9rem;">
+              គ្រប់គ្រងកម្រងតេស្តទាំងអស់ បង្កើតសំណួរតាមកម្រិតលំបាក កែសម្រួល ចម្លងតេស្ត និងបោះពុម្ពវិញ្ញាសា
+            </p>
+          </div>
+          <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+            <button class="btn btn-secondary" id="btn-open-ai-studio">
+              <i data-lucide="sparkles"></i> បង្កើតតាម AI & ឯកសារ
+            </button>
+            <button class="btn btn-primary" id="btn-create-new-quiz">
+              <i data-lucide="plus-circle"></i> បង្កើតកម្រងតេស្តថ្មី
+            </button>
+          </div>
         </div>
-        <button class="btn btn-primary" id="btn-create-new-quiz">
-          <i data-lucide="plus-circle"></i> បង្កើតកម្រងតេស្តថ្មី
-        </button>
-      </div>
 
-      <!-- Quizzes Grid -->
-      <div class="content-grid-3">
-        ${quizzes.map(q => `
-          <div class="card" style="display: flex; flex-direction: column; justify-content: space-between;">
-            <div>
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-                <span class="status-pill ${q.isPublished ? 'status-published' : 'status-hidden'}">
-                  ${q.isPublished ? 'បានផ្សព្វផ្សាយ' : 'ព្រាង'}
-                </span>
-                <span style="font-size: 0.8rem; color: var(--text-muted); font-family: var(--font-math);">
-                  ${q.timeLimitMinutes} នាទី
-                </span>
-              </div>
+        <!-- Metrics Overview Cards -->
+        <div class="metrics-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+          <div class="card metric-card" style="padding: 1rem 1.25rem;">
+            <div style="font-size: 0.8rem; color: var(--text-muted);">កម្រងតេស្តសរុប</div>
+            <div style="font-size: 1.7rem; font-weight: 700; color: #fff; margin-top: 0.25rem;">${totalCount}</div>
+          </div>
+          <div class="card metric-card" style="padding: 1rem 1.25rem;">
+            <div style="font-size: 0.8rem; color: var(--text-muted);">បានផ្សព្វផ្សាយ (Published)</div>
+            <div style="font-size: 1.7rem; font-weight: 700; color: #34d399; margin-top: 0.25rem;">${publishedCount}</div>
+          </div>
+          <div class="card metric-card" style="padding: 1rem 1.25rem;">
+            <div style="font-size: 0.8rem; color: var(--text-muted);">សេចក្តីព្រាង (Draft)</div>
+            <div style="font-size: 1.7rem; font-weight: 700; color: #fbbf24; margin-top: 0.25rem;">${draftCount}</div>
+          </div>
+          <div class="card metric-card" style="padding: 1rem 1.25rem;">
+            <div style="font-size: 0.8rem; color: var(--text-muted);">សំណួរសរុបក្នុងប្រព័ន្ធ</div>
+            <div style="font-size: 1.7rem; font-weight: 700; color: #818cf8; margin-top: 0.25rem;">${totalQuestionsAll}</div>
+          </div>
+        </div>
 
-              <h3 style="font-size: 1.1rem; font-weight: 600; color: #fff; margin-bottom: 0.5rem; line-height: 1.4;">
-                ${q.title}
-              </h3>
-              <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem; line-height: 1.5;">
-                ${q.description || ''}
-              </p>
-
-              <div style="display: flex; gap: 1rem; font-size: 0.82rem; color: var(--text-muted); border-top: 1px solid var(--border-subtle); padding-top: 0.75rem; margin-bottom: 1.25rem;">
-                <div><i data-lucide="help-circle" style="width: 14px; height: 14px; vertical-align: middle;"></i> <b>${(q.questions || []).length}</b> សំណួរ</div>
-                <div><i data-lucide="award" style="width: 14px; height: 14px; vertical-align: middle;"></i> <b>${q.totalPoints || 0}</b> ពិន្ទុ</div>
-                <div><i data-lucide="refresh-cw" style="width: 14px; height: 14px; vertical-align: middle;"></i> <b>${q.maxAttempts || 1}</b> ដង</div>
-              </div>
+        <!-- Search, Filter & Sort Toolbar -->
+        <div class="card" style="padding: 1rem 1.25rem; margin-bottom: 1.5rem;">
+          <div style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr; gap: 0.75rem; align-items: center;">
+            <!-- Search -->
+            <div style="position: relative;">
+              <input type="text" class="form-control" id="quiz-search-input" 
+                     placeholder="🔍 ស្វែងរកតាមឈ្មោះតេស្ត ឬប្រធានបទ..." 
+                     value="${this.quizSearchQuery}" style="padding-left: 1rem;" />
             </div>
 
-            <!-- Quiz Actions -->
-            <div style="display: flex; gap: 0.5rem;">
-              <button class="btn btn-secondary btn-sm btn-preview-quiz" data-qid="${q.id}" style="flex: 1;">
-                <i data-lucide="eye"></i> មើលសំណួរ
-              </button>
-              <button class="btn btn-secondary btn-sm btn-grade-quiz" data-qid="${q.id}" style="flex: 1;" title="កែពិន្ទុ និងមើលស្ថិតិ">
-                <i data-lucide="bar-chart-2"></i> លទ្ធផល
-              </button>
-              <button class="btn btn-danger btn-sm btn-delete-quiz" data-qid="${q.id}">
-                <i data-lucide="trash-2"></i>
-              </button>
+            <!-- Grade Filter -->
+            <div>
+              <select class="form-select" id="quiz-filter-grade">
+                <option value="all" ${this.quizFilterGrade === 'all' ? 'selected' : ''}>គ្រប់កម្រិតថ្នាក់</option>
+                <option value="12" ${this.quizFilterGrade === '12' ? 'selected' : ''}>ថ្នាក់ទី១២ (Grade 12)</option>
+                <option value="11" ${this.quizFilterGrade === '11' ? 'selected' : ''}>ថ្នាក់ទី១១ (Grade 11)</option>
+                <option value="10" ${this.quizFilterGrade === '10' ? 'selected' : ''}>ថ្នាក់ទី១០ (Grade 10)</option>
+              </select>
+            </div>
+
+            <!-- Class Filter -->
+            <div>
+              <select class="form-select" id="quiz-filter-class">
+                <option value="all" ${this.quizFilterClass === 'all' ? 'selected' : ''}>គ្រប់ថ្នាក់រៀន</option>
+                <option value="class-12a" ${this.quizFilterClass === 'class-12a' ? 'selected' : ''}>ថ្នាក់ទី១២A</option>
+                <option value="class-11b" ${this.quizFilterClass === 'class-11b' ? 'selected' : ''}>ថ្នាក់ទី១១B</option>
+                <option value="class-10c" ${this.quizFilterClass === 'class-10c' ? 'selected' : ''}>ថ្នាក់ទី១០C</option>
+              </select>
+            </div>
+
+            <!-- Status Filter -->
+            <div>
+              <select class="form-select" id="quiz-filter-status">
+                <option value="all" ${this.quizFilterStatus === 'all' ? 'selected' : ''}>គ្រប់ស្ថានភាព</option>
+                <option value="published" ${this.quizFilterStatus === 'published' ? 'selected' : ''}>បានផ្សព្វផ្សាយ</option>
+                <option value="draft" ${this.quizFilterStatus === 'draft' ? 'selected' : ''}>សេចក្តីព្រាង</option>
+              </select>
+            </div>
+
+            <!-- Sort By -->
+            <div>
+              <select class="form-select" id="quiz-sort-by">
+                <option value="newest" ${this.quizSortBy === 'newest' ? 'selected' : ''}>ថ្មីបំផុត (Newest)</option>
+                <option value="oldest" ${this.quizSortBy === 'oldest' ? 'selected' : ''}>ចាស់បំផុត (Oldest)</option>
+                <option value="title" ${this.quizSortBy === 'title' ? 'selected' : ''}>ចំណងជើង A-Z</option>
+                <option value="points" ${this.quizSortBy === 'points' ? 'selected' : ''}>ពិន្ទុច្រើន-តិច</option>
+              </select>
             </div>
           </div>
-        `).join('')}
+        </div>
+
+        <!-- Quizzes Grid -->
+        ${filteredQuizzes.length === 0 ? `
+          <div class="card" style="text-align: center; padding: 3.5rem; color: var(--text-muted);">
+            <i data-lucide="inbox" style="width: 48px; height: 48px; color: var(--text-dim); margin-bottom: 1rem;"></i>
+            <h3 style="font-size: 1.15rem; color: var(--text-secondary); margin-bottom: 0.5rem;">រកមិនឃើញកម្រងតេស្តឡើយ</h3>
+            <p style="font-size: 0.9rem; max-width: 450px; margin: 0 auto 1.5rem auto;">
+              មិនទាន់មានតេស្តដែលត្រូវនឹងលក្ខខណ្ឌស្វែងរកនេះទេ។ លោកអ្នកអាចបង្កើតតេស្តថ្មី ឬបង្កើតតាម AI។
+            </p>
+            <button class="btn btn-primary" id="btn-create-empty-state">
+              <i data-lucide="plus-circle"></i> បង្កើតកម្រងតេស្តថ្មី
+            </button>
+          </div>
+        ` : `
+          <div class="content-grid-3">
+            ${filteredQuizzes.map(q => {
+              const diffCounts = q.difficultyCounts || {
+                easy: (q.questions || []).filter(item => item.difficulty === 'easy').length,
+                medium: (q.questions || []).filter(item => item.difficulty === 'medium' || !item.difficulty).length,
+                hard: (q.questions || []).filter(item => item.difficulty === 'hard').length
+              };
+
+              const qCount = (q.questions || []).length;
+              const pts = q.totalPoints || (q.questions || []).reduce((acc, item) => acc + (parseFloat(item.points) || 1), 0);
+
+              return `
+                <div class="card" style="display: flex; flex-direction: column; justify-content: space-between; position: relative;">
+                  <div>
+                    <!-- Status & Grade Header -->
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                      <span class="status-pill ${q.isPublished ? 'status-published' : 'status-draft'}">
+                        ${q.isPublished ? '● បានផ្សព្វផ្សាយ' : '○ សេចក្តីព្រាង'}
+                      </span>
+                      <div style="display: flex; gap: 0.4rem; align-items: center;">
+                        <span style="font-size: 0.75rem; background: rgba(99,102,241,0.15); color: var(--primary-light); padding: 0.15rem 0.5rem; border-radius: 4px; font-weight: 600;">
+                          ${q.grade ? 'ថ្នាក់ទី ' + q.grade : (q.classId === 'class-12a' ? 'ថ្នាក់ទី១២' : 'ថ្នាក់ទី១១')}
+                        </span>
+                        <span style="font-size: 0.8rem; color: var(--text-muted); font-family: var(--font-math);">
+                          ⏱️ ${q.timeLimitMinutes || 30} នាទី
+                        </span>
+                      </div>
+                    </div>
+
+                    <!-- Title & Description -->
+                    <h3 style="font-size: 1.05rem; font-weight: 600; color: #fff; margin-bottom: 0.5rem; line-height: 1.4;">
+                      ${q.title}
+                    </h3>
+                    <p style="font-size: 0.84rem; color: var(--text-secondary); margin-bottom: 0.75rem; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+                      ${q.description || 'គ្មានសេចក្តីពិពណ៌នា'}
+                    </p>
+
+                    <!-- Difficulty Breakdown Badges -->
+                    <div style="display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.85rem;">
+                      <span class="badge-difficulty badge-easy">🟢 ងាយ: ${diffCounts.easy}</span>
+                      <span class="badge-difficulty badge-medium">🟡 មធ្យម: ${diffCounts.medium}</span>
+                      <span class="badge-difficulty badge-hard">🔴 ពិបាក: ${diffCounts.hard}</span>
+                    </div>
+
+                    <!-- Question Metrics -->
+                    <div style="display: flex; justify-content: space-between; font-size: 0.82rem; color: var(--text-muted); border-top: 1px solid var(--border-subtle); padding-top: 0.75rem; margin-bottom: 1rem;">
+                      <div><i data-lucide="help-circle" style="width: 14px; height: 14px; vertical-align: middle;"></i> <b>${qCount}</b> សំណួរ</div>
+                      <div><i data-lucide="award" style="width: 14px; height: 14px; vertical-align: middle;"></i> <b>${pts}</b> ពិន្ទុ</div>
+                      <div><i data-lucide="refresh-cw" style="width: 14px; height: 14px; vertical-align: middle;"></i> <b>${q.maxAttempts || 1}</b> ដង</div>
+                    </div>
+                  </div>
+
+                  <!-- Action Controls -->
+                  <div style="border-top: 1px solid var(--border-subtle); padding-top: 0.75rem;">
+                    <!-- Row 1: Preview, Edit, Print -->
+                    <div style="display: flex; gap: 0.4rem; margin-bottom: 0.4rem;">
+                      <button class="btn btn-secondary btn-sm btn-preview-quiz" data-qid="${q.id}" style="flex: 1;" title="មើលសំណួរ និងរូបមន្ត KaTeX">
+                        <i data-lucide="eye"></i> មើល
+                      </button>
+                      <button class="btn btn-secondary btn-sm btn-edit-quiz" data-qid="${q.id}" style="flex: 1;" title="កែសម្រួលតេស្ត">
+                        <i data-lucide="edit-3"></i> កែប្រែ
+                      </button>
+                      <button class="btn btn-secondary btn-sm btn-print-quiz" data-qid="${q.id}" style="flex: 1;" title="បោះពុម្ព ឬនាំចេញជាក្រដាសប្រឡង">
+                        <i data-lucide="printer"></i> បោះពុម្ព
+                      </button>
+                    </div>
+
+                    <!-- Row 2: Duplicate, Toggle Publish, Grade, Delete -->
+                    <div style="display: flex; gap: 0.4rem;">
+                      <button class="btn btn-secondary btn-sm btn-toggle-publish" data-qid="${q.id}" style="flex: 1; font-size: 0.78rem;" title="${q.isPublished ? 'ប្តូរទៅជាសេចក្តីព្រាង' : 'បោះពុម្ពផ្សាយដល់សិស្ស'}">
+                        <i data-lucide="${q.isPublished ? 'eye-off' : 'globe'}"></i> ${q.isPublished ? 'លាក់' : 'ផ្សាយ'}
+                      </button>
+                      <button class="btn btn-secondary btn-sm btn-duplicate-quiz" data-qid="${q.id}" title="ចម្លងតេស្តនេះទៅជាថ្មី">
+                        <i data-lucide="copy"></i>
+                      </button>
+                      <button class="btn btn-secondary btn-sm btn-grade-quiz" data-qid="${q.id}" title="លទ្ធផល និងកែពិន្ទុ">
+                        <i data-lucide="bar-chart-2"></i>
+                      </button>
+                      <button class="btn btn-danger btn-sm btn-delete-quiz" data-qid="${q.id}" title="លុបតេស្ត">
+                        <i data-lucide="trash-2"></i>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `}
       </div>
     `;
 
     if (window.lucide) window.lucide.createIcons();
+    this.attachQuizManagerEvents(container);
+  }
 
-    // Create New Quiz button
-    const createBtn = document.getElementById('btn-create-new-quiz');
-    if (createBtn) {
-      createBtn.onclick = () => this.showCreateQuizModal();
+  attachQuizManagerEvents(container) {
+    // Toolbar search and filters
+    const searchInput = document.getElementById('quiz-search-input');
+    if (searchInput) {
+      searchInput.oninput = (e) => {
+        this.quizSearchQuery = e.target.value.trim();
+        this.renderQuizManager(container);
+      };
     }
 
-    // Preview Quiz button
+    const gradeSelect = document.getElementById('quiz-filter-grade');
+    if (gradeSelect) {
+      gradeSelect.onchange = (e) => {
+        this.quizFilterGrade = e.target.value;
+        this.renderQuizManager(container);
+      };
+    }
+
+    const classSelect = document.getElementById('quiz-filter-class');
+    if (classSelect) {
+      classSelect.onchange = (e) => {
+        this.quizFilterClass = e.target.value;
+        this.renderQuizManager(container);
+      };
+    }
+
+    const statusSelect = document.getElementById('quiz-filter-status');
+    if (statusSelect) {
+      statusSelect.onchange = (e) => {
+        this.quizFilterStatus = e.target.value;
+        this.renderQuizManager(container);
+      };
+    }
+
+    const sortSelect = document.getElementById('quiz-sort-by');
+    if (sortSelect) {
+      sortSelect.onchange = (e) => {
+        this.quizSortBy = e.target.value;
+        this.renderQuizManager(container);
+      };
+    }
+
+    // Action buttons
+    const createBtn = document.getElementById('btn-create-new-quiz');
+    if (createBtn) createBtn.onclick = () => this.showCreateQuizModal();
+
+    const emptyCreateBtn = document.getElementById('btn-create-empty-state');
+    if (emptyCreateBtn) emptyCreateBtn.onclick = () => this.showCreateQuizModal();
+
+    const aiBtn = document.getElementById('btn-open-ai-studio');
+    if (aiBtn) aiBtn.onclick = () => window.app.navigate('ai-studio');
+
+    // Preview Quiz
     container.querySelectorAll('.btn-preview-quiz').forEach(btn => {
       btn.onclick = () => this.showPreviewQuizQuestions(btn.dataset.qid);
     });
 
-    // View Results / Grading
+    // Edit Quiz
+    container.querySelectorAll('.btn-edit-quiz').forEach(btn => {
+      btn.onclick = () => this.showEditQuizModal(btn.dataset.qid);
+    });
+
+    // Print / Export Quiz
+    container.querySelectorAll('.btn-print-quiz').forEach(btn => {
+      btn.onclick = () => this.showPrintableExamModal(btn.dataset.qid);
+    });
+
+    // Toggle Publish Status
+    container.querySelectorAll('.btn-toggle-publish').forEach(btn => {
+      btn.onclick = async () => {
+        try {
+          const updated = await window.db.togglePublishQuiz(btn.dataset.qid);
+          window.app.showToast(updated.isPublished ? 'បានបោះពុម្ពផ្សាយតេស្តសម្រាប់សិស្ស!' : 'បានកំណត់តេស្តជាសេចក្តីព្រាង!', 'success');
+          this.renderQuizManager(container);
+        } catch (err) {
+          window.app.showToast('កំហុស៖ ' + err.message, 'error');
+        }
+      };
+    });
+
+    // Duplicate Quiz
+    container.querySelectorAll('.btn-duplicate-quiz').forEach(btn => {
+      btn.onclick = async () => {
+        try {
+          const cloned = await window.db.duplicateQuiz(btn.dataset.qid);
+          window.app.showToast(`🎉 បានចម្លងតេស្ត «${cloned.title}» ដោយជោគជ័យ!`, 'success');
+          this.renderQuizManager(container);
+        } catch (err) {
+          window.app.showToast('កំហុសពេលចម្លងតេស្ត៖ ' + err.message, 'error');
+        }
+      };
+    });
+
+    // Grade / Results
     container.querySelectorAll('.btn-grade-quiz').forEach(btn => {
       btn.onclick = () => {
         window.analyticsController.selectedQuizId = btn.dataset.qid;
@@ -747,151 +1024,321 @@ class TeacherController {
     // Delete Quiz
     container.querySelectorAll('.btn-delete-quiz').forEach(btn => {
       btn.onclick = async () => {
-        if (confirm('តើអ្នកពិតជាចង់លុបកម្រងតេស្តនេះមែនទេ?')) {
-          await window.db.deleteQuiz(btn.dataset.qid);
-          window.app.showToast('បានលុបកម្រងតេស្តរួចរាល់', 'success');
-          window.app.renderCurrentView();
+        if (confirm('តើលោកអ្នកពិតជាចង់លុបកម្រងតេស្តនេះមែនទេ? សកម្មភាពនេះមិនអាចត្រឡប់ក្រោយបានឡើយ។')) {
+          try {
+            await window.db.deleteQuiz(btn.dataset.qid);
+            window.app.showToast('បានលុបកម្រងតេស្តចេញពី Database រួចរាល់!', 'success');
+            this.renderQuizManager(container);
+          } catch (err) {
+            window.app.showToast('កំហុសពេលលុបតេស្ត៖ ' + err.message, 'error');
+          }
         }
       };
     });
   }
 
-  showCreateQuizModal() {
+  showCreateQuizModal(initialData = null) {
+    const isEdit = !!initialData;
+    const quiz = initialData || {
+      title: '',
+      description: '',
+      grade: 12,
+      classId: 'class-12a',
+      timeLimitMinutes: 30,
+      maxAttempts: 1,
+      passPercentage: 60,
+      shuffleQuestions: false,
+      showSolutionOnSubmit: true,
+      isPublished: true,
+      questions: [
+        {
+          id: 'q-' + Date.now(),
+          number: 1,
+          type: 'mcq',
+          difficulty: 'medium',
+          points: 5,
+          promptKm: 'គណនាតម្លៃនៃចំនួនកុំផ្លិច $z = (2 + 3i)(1 - 2i)$៖',
+          mathFormula: 'z = (2 + 3i)(1 - 2i)',
+          options: [
+            { id: 'A', text: '$z = 8 - i$' },
+            { id: 'B', text: '$z = 4 - i$' },
+            { id: 'C', text: '$z = 8 + i$' },
+            { id: 'D', text: '$z = -4 - 7i$' }
+          ],
+          correctOption: 'A',
+          explanationKm: 'ពន្លាតតាមច្បាប់ចែកចាយ៖ $z = 2 - 4i + 3i - 6i^2 = 8 - i$។'
+        }
+      ]
+    };
+
     window.app.openModal({
-      title: 'បង្កើតកម្រងតេស្តគណិតវិទ្យា',
+      title: isEdit ? `កែសម្រួលកម្រងតេស្ត៖ ${quiz.title}` : 'បង្កើតកម្រងតេស្តគណិតវិទ្យាថ្មី',
       bodyHtml: `
-        <form id="form-create-quiz">
+        <form id="form-manage-quiz">
+          <!-- Title -->
           <div class="form-group">
-            <label class="form-label">ចំណងជើងតេស្ត *</label>
-            <input type="text" class="form-control" id="quiz-title-input" placeholder="ឧ. តេស្តប្រចាំខែ៖ ចំនួនកុំផ្លិច និងអាំងតេក្រាល" required />
+            <label class="form-label">ចំណងជើងកម្រងតេស្ត *</label>
+            <input type="text" class="form-control" id="mq-title" value="${quiz.title}" placeholder="ឧ. តេស្តប្រចាំខែ៖ ចំនួនកុំផ្លិច និងអាំងតេក្រាល" required />
           </div>
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <!-- Grade, Class, Time, Attempts -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.75rem;">
             <div class="form-group">
-              <label class="form-label">រយៈពេលធ្វើតេស្ត (នាទី) *</label>
-              <input type="number" class="form-control" id="quiz-time-input" value="30" min="5" max="180" required />
-            </div>
-            <div class="form-group">
-              <label class="form-label">ចំនួនដងអនុញ្ញាត (Attempts) *</label>
-              <input type="number" class="form-control" id="quiz-attempts-input" value="1" min="1" max="10" required />
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">សេចក្ដីពិពណ៌នា ឬការណែនាំដល់សិស្ស</label>
-            <textarea class="form-textarea" id="quiz-desc-input" placeholder="សេចក្តីណែនាំ និងការដាក់ពិន្ទុ..."></textarea>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.25rem;">
-            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; color: var(--text-secondary); cursor: pointer;">
-              <input type="checkbox" id="quiz-shuffle-q" /> ច្របល់លំដាប់សំណួរ (Shuffle Questions)
-            </label>
-            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; color: var(--text-secondary); cursor: pointer;">
-              <input type="checkbox" id="quiz-show-sol" checked /> បង្ហាញដំណោះស្រាយក្រោយបញ្ជូន
-            </label>
-          </div>
-
-          <!-- Question Builder Sub-Section -->
-          <div style="border-top: 1px solid var(--border-subtle); padding-top: 1.25rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-              <h4 style="font-size: 1rem; font-weight: 600; color: #fff;">សំណួរគំរូដំបូង</h4>
-              <span class="status-pill status-active">សំណួរទី ១</span>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">ប្រភេទសំណួរ</label>
-              <select class="form-select" id="new-q-type">
-                <option value="mcq">ជ្រើសរើសចម្លើយត្រឹមត្រូវ (Multiple Choice)</option>
-                <option value="true_false">ពិត ឬមិនពិត (True / False)</option>
-                <option value="short_answer">ឆ្លើយខ្លី (Short Answer)</option>
-                <option value="open_response">ដោះស្រាយលម្អិត (Open Response / Manual Grade)</option>
+              <label class="form-label">កម្រិតថ្នាក់</label>
+              <select class="form-select" id="mq-grade">
+                <option value="12" ${quiz.grade == 12 ? 'selected' : ''}>ថ្នាក់ទី១២</option>
+                <option value="11" ${quiz.grade == 11 ? 'selected' : ''}>ថ្នាក់ទី១១</option>
+                <option value="10" ${quiz.grade == 10 ? 'selected' : ''}>ថ្នាក់ទី១០</option>
               </select>
             </div>
-
             <div class="form-group">
-              <label class="form-label">ប្រធានសំណួរ (Khmer) *</label>
-              <textarea class="form-textarea" id="new-q-prompt" placeholder="សរសេរសំណួរនៅទីនេះ..." required></textarea>
+              <label class="form-label">ថ្នាក់រៀន</label>
+              <select class="form-select" id="mq-class">
+                <option value="all" ${quiz.classId === 'all' ? 'selected' : ''}>គ្រប់ថ្នាក់</option>
+                <option value="class-12a" ${quiz.classId === 'class-12a' ? 'selected' : ''}>ថ្នាក់ទី១២A</option>
+                <option value="class-11b" ${quiz.classId === 'class-11b' ? 'selected' : ''}>ថ្នាក់ទី១១B</option>
+                <option value="class-10c" ${quiz.classId === 'class-10c' ? 'selected' : ''}>ថ្នាក់ទី១០C</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">រយៈពេល (នាទី)</label>
+              <input type="number" class="form-control" id="mq-time" value="${quiz.timeLimitMinutes || 30}" min="5" max="180" required />
+            </div>
+            <div class="form-group">
+              <label class="form-label">ចំនួនដងអនុញ្ញាត</label>
+              <input type="number" class="form-control" id="mq-attempts" value="${quiz.maxAttempts || 1}" min="1" max="10" required />
+            </div>
+          </div>
+
+          <!-- Description -->
+          <div class="form-group">
+            <label class="form-label">សេចក្ដីពិពណ៌នា ឬការណែនាំ</label>
+            <textarea class="form-textarea" id="mq-desc" rows="2" placeholder="សេចក្តីណែនាំដល់សិស្ស...">${quiz.description || ''}</textarea>
+          </div>
+
+          <!-- Options Checkboxes -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem; margin-bottom: 1.25rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; color: var(--text-secondary); cursor: pointer;">
+              <input type="checkbox" id="mq-published" ${quiz.isPublished ? 'checked' : ''} /> បោះពុម្ពផ្សាយភ្លាមៗ
+            </label>
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; color: var(--text-secondary); cursor: pointer;">
+              <input type="checkbox" id="mq-shuffle" ${quiz.shuffleQuestions ? 'checked' : ''} /> ច្របល់សំណួរ
+            </label>
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; color: var(--text-secondary); cursor: pointer;">
+              <input type="checkbox" id="mq-show-sol" ${quiz.showSolutionOnSubmit !== false ? 'checked' : ''} /> បង្ហាញដំណោះស្រាយ
+            </label>
+          </div>
+
+          <!-- SECTION: DIFFICULTY MATRIX (កំណត់ចំនួនសំណួរតាមកម្រិត) -->
+          <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 1.25rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+              <span style="font-weight: 700; color: #fff; font-size: 0.95rem;">
+                <i data-lucide="layers" style="width: 16px; height: 16px; vertical-align: middle; color: var(--primary-light);"></i> កម្រិតសំណួរចម្រុះ
+              </span>
+              <span class="status-pill status-active" id="mq-total-q-badge">
+                សំណួរសរុប៖ ${(quiz.questions || []).length} សំណួរ
+              </span>
             </div>
 
-            <div class="form-group">
-              <label class="form-label">រូបមន្តគណិតវិទ្យា KaTeX (បើមាន)</label>
-              <input type="text" class="form-control" id="new-q-math" placeholder="\\int_0^1 x^2 dx" />
-            </div>
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-              <div class="form-group">
-                <label class="form-label">ពិន្ទុសម្រាប់សំណួរនេះ *</label>
-                <input type="number" class="form-control" id="new-q-points" value="5" min="1" max="50" />
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem;">
+              <div>
+                <label class="form-label" style="color: #34d399; font-size: 0.82rem;">🟢 ងាយ</label>
+                <input type="number" class="form-control" id="mq-diff-easy" value="${(quiz.difficultyCounts && quiz.difficultyCounts.easy !== undefined) ? quiz.difficultyCounts.easy : (quiz.questions || []).filter(q => q.difficulty === 'easy').length}" min="0" />
               </div>
-              <div class="form-group">
-                <label class="form-label">ចម្លើយត្រឹមត្រូវ *</label>
-                <input type="text" class="form-control" id="new-q-correct" placeholder="ឧ. A, true, ឬ 1/3" required />
+              <div>
+                <label class="form-label" style="color: #fbbf24; font-size: 0.82rem;">🟡 មធ្យម</label>
+                <input type="number" class="form-control" id="mq-diff-medium" value="${(quiz.difficultyCounts && quiz.difficultyCounts.medium !== undefined) ? quiz.difficultyCounts.medium : (quiz.questions || []).filter(q => q.difficulty === 'medium' || !q.difficulty).length}" min="0" />
+              </div>
+              <div>
+                <label class="form-label" style="color: #fb7185; font-size: 0.82rem;">🔴 ពិបាក</label>
+                <input type="number" class="form-control" id="mq-diff-hard" value="${(quiz.difficultyCounts && quiz.difficultyCounts.hard !== undefined) ? quiz.difficultyCounts.hard : (quiz.questions || []).filter(q => q.difficulty === 'hard').length}" min="0" />
               </div>
             </div>
+          </div>
 
-            <div class="form-group">
-              <label class="form-label">ការពន្យល់ និងដំណោះស្រាយលម្អិត</label>
-              <textarea class="form-textarea" id="new-q-explanation" placeholder="ពន្យល់ជំហានដោះស្រាយសម្រាប់សិស្សផ្ទៀងផ្ទាត់..."></textarea>
+          <!-- Questions List Section -->
+          <div style="border-top: 1px solid var(--border-subtle); padding-top: 1.25rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+              <h4 style="font-size: 1rem; font-weight: 600; color: #fff;">បញ្ជីសំណួរ (${(quiz.questions || []).length} សំណួរ)</h4>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-add-modal-q">
+                <i data-lucide="plus"></i> បន្ថែមសំណួរ
+              </button>
+            </div>
+            
+            <div id="modal-questions-builder" style="display: flex; flex-direction: column; gap: 1rem; max-height: 400px; overflow-y: auto; padding-right: 0.5rem;">
+              <!-- Questions injected here -->
             </div>
           </div>
         </form>
       `,
-      confirmText: 'បង្កើត និងរក្សាទុកតេស្ត',
+      confirmText: isEdit ? 'រក្សាទុកការកែប្រែ' : 'បង្កើត និងរក្សាទុកតេស្ត',
       onConfirm: async () => {
-        const title = document.getElementById('quiz-title-input').value.trim();
-        const timeLimit = parseInt(document.getElementById('quiz-time-input').value, 10);
-        const attempts = parseInt(document.getElementById('quiz-attempts-input').value, 10);
-        const desc = document.getElementById('quiz-desc-input').value.trim();
-        const shuffleQ = document.getElementById('quiz-shuffle-q').checked;
-        const showSol = document.getElementById('quiz-show-sol').checked;
+        const title = document.getElementById('mq-title').value.trim();
+        const grade = parseInt(document.getElementById('mq-grade').value, 10) || 12;
+        const classId = document.getElementById('mq-class').value;
+        const timeLimit = parseInt(document.getElementById('mq-time').value, 10) || 30;
+        const attempts = parseInt(document.getElementById('mq-attempts').value, 10) || 1;
+        const desc = document.getElementById('mq-desc').value.trim();
+        const isPublished = document.getElementById('mq-published').checked;
+        const shuffle = document.getElementById('mq-shuffle').checked;
+        const showSol = document.getElementById('mq-show-sol').checked;
 
-        const qType = document.getElementById('new-q-type').value;
-        const qPrompt = document.getElementById('new-q-prompt').value.trim();
-        const qMath = document.getElementById('new-q-math').value.trim();
-        const qPoints = parseFloat(document.getElementById('new-q-points').value) || 5;
-        const qCorrect = document.getElementById('new-q-correct').value.trim();
-        const qExplanation = document.getElementById('new-q-explanation').value.trim();
+        const easyCount = parseInt(document.getElementById('mq-diff-easy').value, 10) || 0;
+        const medCount = parseInt(document.getElementById('mq-diff-medium').value, 10) || 0;
+        const hardCount = parseInt(document.getElementById('mq-diff-hard').value, 10) || 0;
 
-        if (!title || !qPrompt || !qCorrect) {
-          window.app.showToast('សូមបំពេញព័ត៌មានចាំបាច់ និងសំណួរដំបូង!', 'error');
+        if (!title) {
+          window.app.showToast('សូមបញ្ចូលចំណងជើងតេស្ត!', 'error');
           return false;
         }
 
-        const initialQuestion = {
-          id: 'q-' + Date.now(),
-          number: 1,
-          type: qType,
-          points: qPoints,
-          promptKm: qPrompt,
-          mathFormula: qMath,
-          options: qType === 'mcq' ? [
-            { id: 'A', text: qCorrect },
+        if (this._workingModalQuestions.length === 0) {
+          window.app.showToast('សូមបញ្ចូលយ៉ាងហោចណាស់ ១ សំណួរ!', 'error');
+          return false;
+        }
+
+        const quizPayload = {
+          title,
+          description: desc,
+          grade,
+          classId,
+          timeLimitMinutes: timeLimit,
+          maxAttempts: attempts,
+          shuffleQuestions: shuffle,
+          showSolutionOnSubmit: showSol,
+          isPublished,
+          difficultyCounts: { easy: easyCount, medium: medCount, hard: hardCount },
+          questions: this._workingModalQuestions
+        };
+
+        try {
+          if (isEdit) {
+            // Update existing quiz without duplicating
+            await window.db.updateQuiz(quiz.id, quizPayload);
+            window.app.showToast('🎉 បានកែសម្រួលកម្រងតេស្តរួចរាល់ដោយជោគជ័យ!', 'success');
+          } else {
+            // Create new quiz
+            await window.db.createQuiz(quizPayload);
+            window.app.showToast('🎉 បានបង្កើត និងរក្សាទុកកម្រងតេស្តថ្មីដោយជោគជ័យ!', 'success');
+          }
+
+          this.renderQuizManager(document.getElementById('view-container'));
+          return true;
+        } catch (err) {
+          console.error('Quiz save error:', err);
+          window.app.showToast('កំហុសពេលរក្សាទុក៖ ' + err.message, 'error');
+          return false;
+        }
+      }
+    });
+
+    // Populate working questions
+    this._workingModalQuestions = JSON.parse(JSON.stringify(quiz.questions || []));
+    this.renderModalQuestionsBuilder();
+
+    // Attach Add Question event
+    const addQBtn = document.getElementById('btn-add-modal-q');
+    if (addQBtn) {
+      addQBtn.onclick = () => {
+        const num = this._workingModalQuestions.length + 1;
+        this._workingModalQuestions.push({
+          id: 'q-' + Date.now() + '-' + num,
+          number: num,
+          type: 'mcq',
+          difficulty: 'medium',
+          points: 5,
+          promptKm: `សំណួរទី ${num}៖ ...`,
+          mathFormula: '',
+          options: [
+            { id: 'A', text: 'ចម្លើយត្រឹមត្រូវ' },
             { id: 'B', text: 'ចម្លើយខុសទី ១' },
             { id: 'C', text: 'ចម្លើយខុសទី ២' },
             { id: 'D', text: 'ចម្លើយខុសទី ៣' }
-          ] : [],
-          correctOption: qCorrect,
-          explanationKm: qExplanation || 'ដំណោះស្រាយលម្អិតនឹងត្រូវបានបន្ថែម។'
-        };
-
-        await window.db.createQuiz({
-          classId: this.selectedClassId,
-          title,
-          description: desc,
-          timeLimitMinutes: timeLimit,
-          maxAttempts: attempts,
-          shuffleQuestions: shuffleQ,
-          showSolutionOnSubmit: showSol,
-          isPublished: true,
-          createdBy: window.auth.getCurrentUser().id,
-          questions: [initialQuestion]
+          ],
+          correctOption: 'A',
+          explanationKm: 'ដំណោះស្រាយលម្អិត...'
         });
+        this.renderModalQuestionsBuilder();
+      };
+    }
 
-        window.app.showToast('បានបង្កើតកម្រងតេស្តថ្មីដោយជោគជ័យ!', 'success');
-        window.app.renderCurrentView();
-        return true;
-      }
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  renderModalQuestionsBuilder() {
+    const container = document.getElementById('modal-questions-builder');
+    if (!container) return;
+
+    container.innerHTML = this._workingModalQuestions.map((q, idx) => `
+      <div class="card" style="background: rgba(12, 16, 33, 0.7); padding: 1rem; border: 1px solid var(--border-subtle);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span class="status-pill status-active">សំណួរទី ${idx + 1}</span>
+            <select class="form-select form-select-sm mq-q-diff" data-idx="${idx}" style="width: auto; padding: 0.2rem 0.5rem; font-size: 0.78rem;">
+              <option value="easy" ${q.difficulty === 'easy' ? 'selected' : ''}>🟢 ងាយ</option>
+              <option value="medium" ${q.difficulty === 'medium' || !q.difficulty ? 'selected' : ''}>🟡 មធ្យម</option>
+              <option value="hard" ${q.difficulty === 'hard' ? 'selected' : ''}>🔴 ពិបាក</option>
+            </select>
+            <input type="number" class="form-control form-control-sm mq-q-points" data-idx="${idx}" value="${q.points || 5}" min="1" max="50" style="width: 70px; padding: 0.2rem 0.5rem;" title="ពិន្ទុ" />
+          </div>
+          <button type="button" class="btn btn-danger btn-sm btn-delete-modal-q" data-idx="${idx}" style="padding: 0.2rem 0.5rem;">
+            <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i>
+          </button>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 0.5rem;">
+          <input type="text" class="form-control mq-q-prompt" data-idx="${idx}" value="${q.promptKm || ''}" placeholder="ប្រធានសំណួរ (Khmer)..." />
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
+          <input type="text" class="form-control mq-q-math" data-idx="${idx}" value="${q.mathFormula || ''}" placeholder="រូបមន្ត KaTeX (ឧ. \\int_0^1 x^2 dx)" />
+          <input type="text" class="form-control mq-q-correct" data-idx="${idx}" value="${q.correctOption || ''}" placeholder="ចម្លើយត្រឹមត្រូវ (A, B, តម្លៃ...)" />
+        </div>
+
+        <textarea class="form-textarea mq-q-explanation" data-idx="${idx}" rows="2" placeholder="ដំណោះស្រាយលម្អិត...">${q.explanationKm || ''}</textarea>
+      </div>
+    `).join('');
+
+    // Update live total badge
+    const badge = document.getElementById('mq-total-q-badge');
+    if (badge) badge.innerText = `សំណួរសរុប៖ ${this._workingModalQuestions.length} សំណួរ`;
+
+    // Attach listeners
+    container.querySelectorAll('.mq-q-diff').forEach(el => {
+      el.onchange = () => { this._workingModalQuestions[el.dataset.idx].difficulty = el.value; };
     });
+    container.querySelectorAll('.mq-q-points').forEach(el => {
+      el.onchange = () => { this._workingModalQuestions[el.dataset.idx].points = parseFloat(el.value) || 5; };
+    });
+    container.querySelectorAll('.mq-q-prompt').forEach(el => {
+      el.oninput = () => { this._workingModalQuestions[el.dataset.idx].promptKm = el.value; };
+    });
+    container.querySelectorAll('.mq-q-math').forEach(el => {
+      el.oninput = () => { this._workingModalQuestions[el.dataset.idx].mathFormula = el.value; };
+    });
+    container.querySelectorAll('.mq-q-correct').forEach(el => {
+      el.oninput = () => { this._workingModalQuestions[el.dataset.idx].correctOption = el.value; };
+    });
+    container.querySelectorAll('.mq-q-explanation').forEach(el => {
+      el.oninput = () => { this._workingModalQuestions[el.dataset.idx].explanationKm = el.value; };
+    });
+    container.querySelectorAll('.btn-delete-modal-q').forEach(btn => {
+      btn.onclick = () => {
+        this._workingModalQuestions.splice(parseInt(btn.dataset.idx, 10), 1);
+        this.renderModalQuestionsBuilder();
+      };
+    });
+
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  async showEditQuizModal(quizId) {
+    const quiz = await window.db.getQuizById(quizId, 'teacher');
+    if (!quiz) {
+      window.app.showToast('រកមិនឃើញកម្រងតេស្តទេ', 'error');
+      return;
+    }
+    this.showCreateQuizModal(quiz);
   }
 
   showPreviewQuizQuestions(quizId) {
@@ -903,17 +1350,42 @@ class TeacherController {
           <div style="display: flex; flex-direction: column; gap: 1rem;">
             ${(quiz.questions || []).map((q, idx) => `
               <div class="card" style="background: rgba(12, 16, 33, 0.7); padding: 1.25rem;">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
-                  <span class="status-pill status-active">សំណួរ ${idx + 1} (${q.type.toUpperCase()})</span>
-                  <span style="font-family: var(--font-math); color: var(--primary-light); font-weight: 600;">${q.points} ពិន្ទុ</span>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem; align-items: center;">
+                  <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span class="status-pill status-active">សំណួរទី ${idx + 1}</span>
+                    <span class="badge-difficulty ${q.difficulty === 'easy' ? 'badge-easy' : (q.difficulty === 'hard' ? 'badge-hard' : 'badge-medium')}">
+                      ${q.difficulty === 'easy' ? '🟢 ងាយ' : (q.difficulty === 'hard' ? '🔴 ពិបាក' : '🟡 មធ្យម')}
+                    </span>
+                    <span style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase;">${q.type || 'MCQ'}</span>
+                  </div>
+                  <span style="font-family: var(--font-math); color: var(--primary-light); font-weight: 600;">${q.points || 5} ពិន្ទុ</span>
                 </div>
-                <div style="font-size: 1rem; color: #fff; margin-bottom: 0.5rem;">${q.promptKm}</div>
-                ${q.mathFormula ? `<div style="text-align: center; margin: 0.75rem 0;">$$${q.mathFormula}$$</div>` : ''}
-                <div style="font-size: 0.85rem; color: #34d399; font-weight: 600;">
+
+                <div style="font-size: 1rem; color: #fff; margin-bottom: 0.5rem; line-height: 1.6;">${q.promptKm}</div>
+
+                ${q.image ? `
+                  <div style="margin: 0.75rem 0; text-align: center;">
+                    <img src="${q.image}" style="max-height: 220px; border-radius: 8px; border: 1px solid var(--border-subtle);" alt="Question Diagram" />
+                  </div>
+                ` : ''}
+
+                ${q.mathFormula ? `<div style="text-align: center; margin: 0.75rem 0; color: var(--primary-light);">$$${q.mathFormula}$$</div>` : ''}
+
+                ${(q.options && q.options.length > 0) ? `
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.75rem;">
+                    ${q.options.map(opt => `
+                      <div style="padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid ${opt.id === q.correctOption ? 'rgba(16, 185, 129, 0.5)' : 'var(--border-subtle)'}; background: ${opt.id === q.correctOption ? 'rgba(16, 185, 129, 0.12)' : 'rgba(255,255,255,0.02)'}; font-size: 0.85rem;">
+                        <b>${opt.id}.</b> ${opt.text || opt.math || ''}
+                      </div>
+                    `).join('')}
+                  </div>
+                ` : ''}
+
+                <div style="font-size: 0.85rem; color: #34d399; font-weight: 600; margin-bottom: 0.4rem;">
                   ចម្លើយត្រឹមត្រូវ៖ ${q.correctOption}
                 </div>
-                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.4rem; white-space: pre-line;">
-                  ${q.explanationKm}
+                <div style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.6; white-space: pre-line; background: rgba(99, 102, 241, 0.05); padding: 0.6rem; border-radius: 6px;">
+                  <b>ដំណោះស្រាយ៖</b><br/>${q.explanationKm}
                 </div>
               </div>
             `).join('')}
@@ -928,7 +1400,106 @@ class TeacherController {
       }, 50);
     });
   }
+
+  showPrintableExamModal(quizId) {
+    window.db.getQuizById(quizId, 'teacher').then(quiz => {
+      if (!quiz) return;
+      const pts = quiz.totalPoints || (quiz.questions || []).reduce((acc, q) => acc + (parseFloat(q.points) || 1), 0);
+
+      window.app.openModal({
+        title: 'នាំចេញ និងបោះពុម្ពវិញ្ញាសាគណិតវិទ្យា',
+        bodyHtml: `
+          <div style="margin-bottom: 1rem; text-align: right;">
+            <button class="btn btn-primary" id="btn-trigger-print">
+              <i data-lucide="printer"></i> បោះពុម្ពលើក្រដាស (Print / Save PDF)
+            </button>
+          </div>
+
+          <!-- Official Printable Sheet -->
+          <div class="printable-exam-paper">
+            <div class="printable-exam-header">
+              <div style="font-size: 1.15rem; font-weight: 700; letter-spacing: 0.05em;">ព្រះរាជាណាចក្រកម្ពុជា</div>
+              <div style="font-size: 1.05rem; font-weight: 600;">ជាតិ សាសនា ព្រះមហាក្សត្រ</div>
+              <div style="margin-top: 0.75rem; font-size: 0.95rem; font-weight: 600; color: #475569;">
+                វិទ្យាល័យព្រះស៊ីសុវត្ថិ • ក្រសួងអប់រំ យុវជន និងកីឡា
+              </div>
+              <div class="printable-exam-title">
+                វិញ្ញាសាតេស្ត៖ ${quiz.title}
+              </div>
+              <div class="printable-exam-meta">
+                <span>ថ្នាក់ទី៖ ${quiz.grade || 12}</span>
+                <span>មុខវិជ្ជា៖ ${quiz.subject || 'គណិតវិទ្យា'}</span>
+                <span>រយៈពេល៖ ${quiz.timeLimitMinutes || 30} នាទី</span>
+                <span>ពិន្ទុសរុប៖ ${pts} ពិន្ទុ</span>
+              </div>
+            </div>
+
+            <!-- Student Name Box -->
+            <div class="printable-student-box">
+              <div>
+                <div>ឈ្មោះសិស្ស៖ ..........................................................................</div>
+                <div style="margin-top: 0.5rem;">ថ្ងៃខែឆ្នាំកំណើត៖ .................................... ថ្នាក់៖ .................</div>
+              </div>
+              <div style="border-left: 1px solid #cbd5e1; padding-left: 1rem; display: flex; flex-direction: column; justify-content: center; align-items: center;">
+                <div style="font-weight: 700; color: #64748b; font-size: 0.8rem;">ពិន្ទុទទួលបាន</div>
+                <div style="font-size: 1.4rem; font-weight: 700; color: #0f172a; margin-top: 0.25rem;">....../${pts}</div>
+              </div>
+            </div>
+
+            <!-- Questions -->
+            <div class="printable-questions-list">
+              ${(quiz.questions || []).map((q, idx) => `
+                <div class="printable-question-item">
+                  <div class="printable-question-num">
+                    សំណួរទី ${idx + 1} (${q.points || 5} ពិន្ទុ) [${q.difficulty === 'easy' ? 'ងាយ' : (q.difficulty === 'hard' ? 'ពិបាក' : 'មធ្យម')}]៖
+                  </div>
+                  <div style="font-size: 1rem; color: #1e293b; margin-bottom: 0.5rem;">
+                    ${q.promptKm}
+                  </div>
+
+                  ${q.image ? `
+                    <div style="text-align: center; margin: 0.75rem 0;">
+                      <img src="${q.image}" style="max-height: 200px;" alt="Question Diagram" />
+                    </div>
+                  ` : ''}
+
+                  ${q.mathFormula ? `
+                    <div style="text-align: center; margin: 0.75rem 0; font-size: 1.1rem;">
+                      $$${q.mathFormula}$$
+                    </div>
+                  ` : ''}
+
+                  ${(q.options && q.options.length > 0) ? `
+                    <div class="printable-options-grid">
+                      ${q.options.map(opt => `
+                        <div><b>${opt.id}.</b> ${opt.text || opt.math || ''}</div>
+                      `).join('')}
+                    </div>
+                  ` : `
+                    <div style="height: 60px; border-bottom: 1px dotted #94a3b8; margin-top: 1rem;">
+                      <span style="font-size: 0.85rem; color: #64748b;">ចម្លើយ៖</span>
+                    </div>
+                  `}
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `,
+        confirmText: 'បិទ',
+        onConfirm: async () => true
+      });
+
+      setTimeout(() => {
+        window.quizService.renderMath(document.querySelector('.printable-exam-paper'));
+        const printBtn = document.getElementById('btn-trigger-print');
+        if (printBtn) {
+          printBtn.onclick = () => window.print();
+        }
+      }, 50);
+    });
+  }
 }
 
 // Global Teacher Controller instance
 window.teacherController = new TeacherController();
+
