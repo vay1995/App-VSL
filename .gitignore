@@ -1,0 +1,20 @@
+# Large binary executables
+cloudflared.exe
+*.exe
+
+# Local environment & secret variables
+.env
+.env.local
+
+# Logs & temp files
+*.log
+.system_generated/
+.agents/
+
+# Operating System files
+Thumbs.db
+.DS_Store
+
+# IDE & Editor caches
+.vscode/
+.idea/

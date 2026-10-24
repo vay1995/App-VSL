@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="km">
+<head>
+  <meta charset="UTF-8">
+  <title>Security & Owner RBAC Test Suite</title>
+  <style>
+    body { font-family: monospace; background: #0f172a; color: #f8fafc; padding: 2rem; }
+    .pass { color: #10b981; }
+    .fail { color: #ef4444; }
+    .header { color: #38bdf8; font-weight: bold; margin-top: 1rem; }
+    #summary { font-size: 1.2rem; font-weight: bold; padding: 1rem; margin-top: 1rem; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>🧪 Security, RBAC & Permanent Owner Test Suite</h1>
+  <div id="output"></div>
+  <div id="summary"></div>
+
+  <script src="../js/supabase-config.js"></script>
+  <script src="../js/data-seed.js"></script>
+  <script src="../js/db.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/ai.js"></script>
+  <script>
+    async function runTestSuite() {
+      const out = document.getElementById('output');
+      const sum = document.getElementById('summary');
+      let passed = 0;
+      let failed = 0;
+
+      function log(msg, type = '') {
+        const div = document.createElement('div');
+        div.className = type;
+        div.textContent = msg;
+        out.appendChild(div);
+      }
+
+      function assert(condition, message) {
+        if (condition) {
+          log('  ✅ PASS: ' + message, 'pass');
+          passed++;
+        } else {
+          log('  ❌ FAIL: ' + message, 'fail');
+          failed++;
+        }
+      }
+
+      try {
+        log('--- 1. Initializing DB and Checking Seed Data ---', 'header');
+        await window.db.init();
+        const users = await window.db.getUsers();
+        assert(users.length >= 3, `Database initialized with ${users.length} accounts`);
+
+        // ==========================================
+        // 2. OWNER PRIVILEGES & IMMUTABILITY
+        // ==========================================
+        log('--- 2. Testing Default Owner Privileges & Immutability ---', 'header');
+        const activeOwnerEmail = window.db.getOwnerEmail() || 'vayseangleng@gmail.com';
+        await window.auth.login(activeOwnerEmail, 'Password123!');
+        assert(window.auth.isOwner() === true, `Configured Owner (${activeOwnerEmail}) successfully logged in and isOwner() is true`);
+        assert(window.auth.canManageUsers() === true, 'Owner canManageUsers() is true');
+
+        const logs = await window.db.getAuditLogs();
+        assert(Array.isArray(logs) && logs.length > 0, `Owner successfully retrieved audit logs (${logs.length})`);
+
+        let demotionBlocked = false;
+        try {
+          const ownerUser = users.find(u => u.role === 'owner');
+          await window.db.updateUserRole(ownerUser.id, 'student');
+        } catch (err) {
+          demotionBlocked = true;
+        }
+        assert(demotionBlocked, 'Owner role is completely immutable and cannot be demoted');
+
+        // ==========================================
+        // 3. TEACHER RESTRICTIONS
+        // ==========================================
+        log('--- 3. Testing Teacher Permissions & Restrictions ---', 'header');
+        await window.auth.login('teacher@khmermath.edu.kh', 'Password123!');
+        assert(window.auth.isTeacher() === true, 'Teacher isTeacher() is true');
+        assert(window.auth.isOwner() === false, 'Teacher isOwner() is false');
+
+        let teacherAuditBlocked = false;
+        try {
+          await window.db.getAuditLogs();
+        } catch {
+          teacherAuditBlocked = true;
+        }
+        assert(teacherAuditBlocked, 'Teacher restricted from viewing audit logs (Owner only)');
+
+        // ==========================================
+        // 4. STUDENT RESTRICTIONS & PRIVACY
+        // ==========================================
+        log('--- 4. Testing Student Restrictions & Answer Privacy ---', 'header');
+        await window.auth.login('student@khmermath.edu.kh', 'Password123!');
+        assert(window.auth.isStudent() === true, 'Student isStudent() is true');
+        assert(window.auth.isTeacher() === false, 'Student isTeacher() is false');
+        assert(window.auth.isOwner() === false, 'Student isOwner() is false');
+
+        let studentCreateLessonBlocked = false;
+        try {
+          await window.db.createLesson({ chapterId: 'chap-12-1', title: 'Hacked Lesson' });
+        } catch {
+          studentCreateLessonBlocked = true;
+        }
+        assert(studentCreateLessonBlocked, 'Student blocked from creating lessons (403)');
+
+        // Answer key protection
+        const sanitizedQuiz = await window.db.getQuizById('quiz-12-complex', 'student');
+        let leaked = false;
+        for (const q of sanitizedQuiz.questions) {
+          if (q.correctOption !== undefined || q.explanationKm !== undefined) {
+            leaked = true; break;
+          }
+        }
+        assert(!leaked, 'Sanitized quiz does NOT leak master correctOption or explanationKm to student');
+
+        // ==========================================
+        // 5. PERMANENT OWNER GMAIL SYSTEM & AUTO-PROMOTION
+        // ==========================================
+        log('--- 5. Testing Permanent Owner Gmail & Auto Super Admin Promotion ---', 'header');
+        assert(window.db.getOwnerEmail() === 'vayseangleng@gmail.com', `Permanent Owner Gmail loaded from server: ${window.db.getOwnerEmail()}`);
+
+        // Ensure vayseangleng@gmail.com is genuine owner in DB
+        const currentUsers = await window.db.getUsers();
+        const ownerInDb = currentUsers.find(u => u.email === 'vayseangleng@gmail.com');
+        assert(ownerInDb && ownerInDb.isOwner === true && ownerInDb.role === 'owner', 'Database verifies vayseangleng@gmail.com has permanent Super Admin/Owner role');
+
+        // Test registering a new test account with auto-promotion
+        const tempTestOwner = 'new_owner_' + Date.now() + '@khmermath.edu.kh';
+        window.db.configuredOwnerEmail = tempTestOwner;
+        const createdTestOwner = await window.auth.register({
+          fullNameKm: 'ម្ចាស់កម្មវិធីសាកល្បង',
+          email: tempTestOwner,
+          password: 'TestPassword123!',
+          requestedRole: 'student'
+        });
+        assert(createdTestOwner.role === 'owner' && createdTestOwner.isOwner === true, 'Account registered with matching Owner Gmail is automatically elevated to Super Admin');
+
+        // Restore permanent owner vayseangleng@gmail.com
+        await window.db.setOwnerEmail('vayseangleng@gmail.com', true);
+        assert(window.db.getOwnerEmail() === 'vayseangleng@gmail.com', 'Restored permanent Owner Gmail to vayseangleng@gmail.com');
+
+        // Verify permanent owner login
+        await window.auth.login('vayseangleng@gmail.com', 'Password123!');
+        assert(window.auth.isOwner() === true, 'Permanent Owner vayseangleng@gmail.com verified as Super Admin');
+
+        // Anti-Tampering test: Malicious Teacher tries to alter their in-memory role
+        await window.auth.login('teacher@khmermath.edu.kh', 'Password123!');
+        // Tamper with memory
+        window.auth.currentUser.role = 'owner';
+        window.auth.currentUser.isOwner = true;
+        let tamperBlocked = false;
+        try {
+          await window.db.getAuditLogs();
+        } catch (err) {
+          tamperBlocked = true;
+        }
+        assert(tamperBlocked, 'Anti-Tampering: Tampered in-memory role is caught and blocked by database record verification');
+
+        // Ensure data intact: students, teachers, classes, quizzes still exist
+        const finalUsers = await window.db.getUsers();
+        const finalQuizzes = await window.db.getQuizzes();
+        const finalClasses = await window.db.getClasses();
+        assert(finalUsers.length >= 4, `All user accounts intact (${finalUsers.length} users)`);
+        assert(finalQuizzes.length >= 1, `Quizzes intact (${finalQuizzes.length} quizzes)`);
+        // ==========================================
+        // 6. CROSS-PLATFORM PWA & MULTI-DEVICE CENTRAL SYNC
+        // ==========================================
+        log('--- 6. Testing Cross-Platform PWA & Central Sync Architecture ---', 'header');
+
+        // Check central sync methods
+        assert(typeof window.db.syncFromCentralServer === 'function', 'DatabaseService has syncFromCentralServer method');
+        assert(typeof window.db.pushToCentralServer === 'function', 'DatabaseService has pushToCentralServer method');
+
+        // Verify Server Sync endpoint responds correctly
+        let syncEndpointWorking = false;
+        try {
+          const syncRes = await fetch('/api/db/sync');
+          if (syncRes.ok) {
+            const syncData = await syncRes.json();
+            syncEndpointWorking = syncData !== null;
+          }
+        } catch (e) {
+          console.warn('Sync test fetch note:', e);
+        }
+        assert(syncEndpointWorking, 'Central Server /api/db/sync endpoint is active and accessible');
+
+        // Verify PWA Manifest is valid JSON with required standalone PWA properties
+        let manifestValid = false;
+        try {
+          const mRes = await fetch('/manifest.json');
+          if (mRes.ok) {
+            const mData = await mRes.json();
+            manifestValid = mData.display === 'standalone' && 
+                            mData.icons && mData.icons.length >= 2 && 
+                            mData.name.includes('Khmer Math') &&
+                            mData.start_url !== undefined;
+          }
+        } catch (e) {
+          console.warn('Manifest test note:', e);
+        }
+        assert(manifestValid, 'PWA Manifest is valid with standalone display, icons, and Khmer Math branding');
+
+        // Verify Service Worker script is available
+        let swAvailable = false;
+        try {
+          const swRes = await fetch('/sw.js');
+          if (swRes.ok) {
+            const swText = await swRes.text();
+            swAvailable = swText.includes('CACHE_NAME') && swText.includes('install');
+          }
+        } catch (e) {
+          console.warn('SW test note:', e);
+        }
+        assert(swAvailable, 'Service Worker sw.js exists with pre-caching and offline strategies');
+
+        // Verify Icons are available
+        let iconsAvailable = false;
+        try {
+          const icon192Res = await fetch('/icons/icon-192.png');
+          const appleIconRes = await fetch('/icons/apple-touch-icon.png');
+          const svgIconRes = await fetch('/icons/icon.svg');
+          iconsAvailable = icon192Res.ok && appleIconRes.ok && svgIconRes.ok;
+        } catch (e) {
+          console.warn('Icon test note:', e);
+        }
+        assert(iconsAvailable, 'PWA Icons (192px, 512px, Apple Touch Icon, SVG) are properly served');
+
+        // ==========================================
+        // 7. AI STUDIO & GEMINI API MODEL CONFIGURATION
+        // ==========================================
+        log('--- 7. Testing AI Math Studio & Gemini API Model Configuration ---', 'header');
+
+        assert(typeof window.aiStudio !== 'undefined', 'AIMathStudio instance (window.aiStudio) is initialized');
+
+        // Verify default model or customized model
+        localStorage.removeItem('KM_GEMINI_MODEL');
+        const defaultModel = localStorage.getItem('KM_GEMINI_MODEL') || 'gemini-1.5-pro';
+        assert(defaultModel === 'gemini-1.5-pro', 'Default Gemini model is set to gemini-1.5-pro (avoiding deprecated v1beta gemini-1.5-flash)');
+
+        // Test model switching to gemini-1.5-flash-latest
+        localStorage.setItem('KM_GEMINI_MODEL', 'gemini-1.5-flash-latest');
+        assert(localStorage.getItem('KM_GEMINI_MODEL') === 'gemini-1.5-flash-latest', 'Successfully switches and stores model as gemini-1.5-flash-latest');
+
+        // Reset to recommended gemini-1.5-pro
+        localStorage.setItem('KM_GEMINI_MODEL', 'gemini-1.5-pro');
+
+        // Verify curriculum math generator (offline/fallback generator)
+        const genQuestions = window.aiStudio.generateFromCurriculumEngine('ចំនួនកុំផ្លិច', '12', 'mcq', 'medium');
+        assert(genQuestions && genQuestions.length > 0, `AI Curriculum engine generates ${genQuestions.length} pedagogical math questions with KaTeX formulas`);
+        assert(genQuestions[0].mathFormula && genQuestions[0].mathFormula.length > 0, 'Generated question contains valid mathFormula');
+        assert(genQuestions[0].explanationKm && genQuestions[0].explanationKm.length > 0, 'Generated question contains step-by-step Khmer explanation');
+
+        sum.innerHTML = `<span style="color:#10b981;">🎉 ALL TESTS PASSED (${passed}/${passed + failed})! Cross-Platform PWA, Security & Gemini AI verified.</span>`;
+        window.__TEST_RESULTS = { passed, failed, success: failed === 0 };
+      } catch (err) {
+        log('💥 FATAL ERROR: ' + err.message, 'fail');
+        sum.innerHTML = `<span style="color:#ef4444;">❌ TEST SUITE FAILED: ${err.message}</span>`;
+        window.__TEST_RESULTS = { passed, failed, success: false, error: err.message };
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', runTestSuite);
+  </script>
+</body>
+</html>

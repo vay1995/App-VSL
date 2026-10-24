@@ -1,0 +1,63 @@
+{
+  "name": "Khmer Math Learning & Assessment System (ប្រព័ន្ធរៀន និងវាយតម្លៃគណិតវិទ្យាខ្មែរ)",
+  "short_name": "Khmer Math",
+  "description": "ប្រព័ន្ធរៀន វាយតម្លៃ និងបង្កើតសន្លឹកកិច្ចការគណិតវិទ្យាខ្មែរ សម្រាប់ថ្នាក់ទី១០ ទី១១ និងទី១២ គាំទ្រ KaTeX, AI Math Studio និងប្រឡងអនឡាញ",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#070913",
+  "theme_color": "#0c1021",
+  "lang": "km",
+  "dir": "ltr",
+  "categories": ["education", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "មេរៀន & សន្លឹកកិច្ចការ",
+      "short_name": "មេរៀន",
+      "description": "មើលមេរៀន ជំពូក និងទាញយកឯកសារសន្លឹកកិច្ចការ",
+      "url": "./index.html?view=lessons",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "ប្រព័ន្ធតេស្ត & ប្រឡង",
+      "short_name": "តេស្ត",
+      "description": "ធ្វើតេស្តគណិតវិទ្យាអនឡាញ កំណត់ពេល និងវាស់ស្ទង់សមត្ថភាព",
+      "url": "./index.html?view=quizzes",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "AI Math Studio",
+      "short_name": "AI Studio",
+      "description": "បង្កើតលំហាត់ សន្លឹកកិច្ចការ និងដំណោះស្រាយជាមួយ AI",
+      "url": "./index.html?view=ai",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
